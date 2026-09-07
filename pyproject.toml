@@ -12,6 +12,12 @@ license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/nth-bailey/pyxsdata-core"
+Documentation = "https://nth-bailey.github.io/pyxsdata-core/"
+Repository = "https://github.com/nth-bailey/pyxsdata-core"
+Issues = "https://github.com/nth-bailey/pyxsdata-core/issues"
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
