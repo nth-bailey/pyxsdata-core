@@ -29,17 +29,26 @@ impl StackFrame {
 
     fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<PyObject> {
         let kwargs = PyDict::new_bound(py);
+        let mut post_init_fields: Vec<(usize, PyObject)> = Vec::new();
 
         // Populate collected fields
         for (idx, val) in &self.scalar_values {
             let field = &self.schema.fields[*idx];
-            kwargs.set_item(&field.py_name_obj, val)?;
+            if field.is_init {
+                kwargs.set_item(&field.py_name_obj, val)?;
+            } else {
+                post_init_fields.push((*idx, val.clone_ref(py)));
+            }
         }
 
         for (idx, list_items) in &self.list_values {
             let field = &self.schema.fields[*idx];
             let py_list = PyList::new_bound(py, list_items);
-            kwargs.set_item(&field.py_name_obj, py_list)?;
+            if field.is_init {
+                kwargs.set_item(&field.py_name_obj, py_list)?;
+            } else {
+                post_init_fields.push((*idx, py_list.into_any().unbind()));
+            }
         }
 
         if let Some(text_idx) = self.schema.text_field {
@@ -48,13 +57,21 @@ impl StackFrame {
                 if let ValueType::Scalar(ref scalar_type) = field.val_type {
                     let py_val =
                         ValueConverter::parse_scalar(py, scalar_type, &self.frame_text_buf)?;
-                    kwargs.set_item(&field.py_name_obj, py_val)?;
+                    if field.is_init {
+                        kwargs.set_item(&field.py_name_obj, py_val)?;
+                    } else {
+                        post_init_fields.push((text_idx, py_val.unbind()));
+                    }
                 }
             }
         }
 
         let cls = self.schema.py_class.bind(py);
         let instance = cls.call((), Some(&kwargs))?;
+        for (idx, val) in post_init_fields {
+            let field = &self.schema.fields[idx];
+            instance.setattr(&*field.py_name, val)?;
+        }
         Ok(instance.unbind())
     }
 }

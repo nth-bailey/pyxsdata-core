@@ -36,6 +36,7 @@ pub struct FieldSchema {
     pub xml_name: Vec<u8>,
     pub kind: FieldKind,
     pub val_type: ValueType,
+    pub is_init: bool,
 }
 
 #[derive(Debug)]
@@ -52,6 +53,13 @@ impl ModelSchema {
         let py = cls.py();
         let fields_dict = cls.getattr("__dataclass_fields__")?;
         let dict: Bound<'py, PyDict> = fields_dict.downcast_into()?;
+
+        let type_hints: Option<Bound<'py, PyDict>> = py
+            .import_bound("typing")
+            .ok()
+            .and_then(|m| m.getattr("get_type_hints").ok())
+            .and_then(|f| f.call1((cls,)).ok())
+            .and_then(|h| h.downcast_into::<PyDict>().ok());
 
         let mut fields = Vec::new();
         let mut element_map = HashMap::new();
@@ -81,8 +89,21 @@ impl ModelSchema {
                 }
             }
 
-            // Extract type annotation
-            let field_type_obj = field_obj.getattr("type")?;
+            let is_init: bool = field_obj
+                .getattr("init")
+                .and_then(|v| v.extract())
+                .unwrap_or(true);
+
+            // Extract type annotation (using type_hints for PEP 563 string annotations if available)
+            let field_type_obj = if let Some(ref hints) = type_hints {
+                if let Ok(Some(hint)) = hints.get_item(&field_name_obj) {
+                    hint
+                } else {
+                    field_obj.getattr("type")?
+                }
+            } else {
+                field_obj.getattr("type")?
+            };
             let val_type = Self::resolve_value_type(py, &field_type_obj)?;
 
             let idx = fields.len();
@@ -106,6 +127,7 @@ impl ModelSchema {
                 xml_name,
                 kind,
                 val_type,
+                is_init,
             });
         }
 
