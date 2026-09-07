@@ -51,6 +51,80 @@ pub struct ModelSchema {
 impl ModelSchema {
     pub fn from_py_class<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<Self>> {
         let py = cls.py();
+
+        if cls.hasattr("model_fields")? {
+            let model_fields = cls.getattr("model_fields")?;
+            let dict: Bound<'py, PyDict> = model_fields.downcast_into()?;
+
+            let mut fields = Vec::new();
+            let mut element_map = HashMap::new();
+            let mut attribute_map = HashMap::new();
+            let mut text_field = None;
+
+            for (field_name_obj, field_obj) in dict.iter() {
+                let py_name: String = field_name_obj.extract()?;
+                let py_name_py_str = PyString::new_bound(py, &py_name).into_any().unbind();
+
+                let mut xml_name_str = py_name.clone();
+                let mut kind = FieldKind::Element;
+
+                // Check xsdata_metadata or json_schema_extra or metadata
+                let metadata = field_obj
+                    .getattr("xsdata_metadata")
+                    .ok()
+                    .or_else(|| field_obj.getattr("json_schema_extra").ok());
+
+                if let Some(ref meta) = metadata {
+                    if let Ok(type_val) = meta.get_item("type") {
+                        let type_str: String = type_val.extract().unwrap_or_default();
+                        match type_str.as_str() {
+                            "Attribute" => kind = FieldKind::Attribute,
+                            "Text" => kind = FieldKind::Text,
+                            _ => kind = FieldKind::Element,
+                        }
+                    }
+                    if let Ok(name_val) = meta.get_item("name") {
+                        xml_name_str = name_val.extract().unwrap_or(py_name.clone());
+                    }
+                }
+
+                let field_type_obj = field_obj.getattr("annotation")?;
+                let val_type = Self::resolve_value_type(py, &field_type_obj)?;
+
+                let idx = fields.len();
+                let xml_name = xml_name_str.into_bytes();
+
+                match kind {
+                    FieldKind::Attribute => {
+                        attribute_map.insert(xml_name.clone(), idx);
+                    }
+                    FieldKind::Element => {
+                        element_map.insert(xml_name.clone(), idx);
+                    }
+                    FieldKind::Text => {
+                        text_field = Some(idx);
+                    }
+                }
+
+                fields.push(FieldSchema {
+                    py_name,
+                    py_name_obj: py_name_py_str,
+                    xml_name,
+                    kind,
+                    val_type,
+                    is_init: true,
+                });
+            }
+
+            return Ok(Arc::new(ModelSchema {
+                py_class: cls.clone().into_any().unbind(),
+                fields,
+                element_map,
+                attribute_map,
+                text_field,
+            }));
+        }
+
         let fields_dict = cls.getattr("__dataclass_fields__")?;
         let dict: Bound<'py, PyDict> = fields_dict.downcast_into()?;
 
@@ -182,8 +256,8 @@ impl ModelSchema {
             "XmlDate" => Ok(ValueType::Scalar(ScalarType::XmlDate)),
             "XmlDateTime" => Ok(ValueType::Scalar(ScalarType::XmlDateTime)),
             _ => {
-                // Check if it is another dataclass
-                if type_obj.hasattr("__dataclass_fields__")? {
+                // Check if it is another dataclass or Pydantic model
+                if type_obj.hasattr("__dataclass_fields__")? || type_obj.hasattr("model_fields")? {
                     if let Ok(cls) = type_obj.downcast::<PyType>() {
                         let nested = Self::from_py_class(cls)?;
                         return Ok(ValueType::Nested(nested));

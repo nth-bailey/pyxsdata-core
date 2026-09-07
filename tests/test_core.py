@@ -129,3 +129,44 @@ def test_malformed_xml():
     with pytest.raises(ValueError):
         pyxsdata_core.deserialize(xml, Container)
 
+
+def test_pydantic_model_deserialization():
+    from pydantic import BaseModel
+    from pyxsdata.pydantic.fields import field as pydantic_field
+
+    class PydanticItem(BaseModel):
+        id: str = pydantic_field(metadata={"type": "Attribute"})
+        name: str = pydantic_field(default="")
+        price: float = pydantic_field(default=0.0)
+
+    class PydanticCart(BaseModel):
+        items: list[PydanticItem] = pydantic_field(
+            default_factory=list, metadata={"name": "item", "type": "Element"}
+        )
+        user: str = pydantic_field(default="")
+
+    xml = b"""
+    <PydanticCart>
+        <user>Alice</user>
+        <item id="i1">
+            <name>Keyboard</name>
+            <price>99.50</price>
+        </item>
+        <item id="i2">
+            <name>Mouse</name>
+            <price>24.99</price>
+        </item>
+    </PydanticCart>
+    """
+    res = pyxsdata_core.deserialize(xml, PydanticCart)
+    assert isinstance(res, PydanticCart)
+    assert res.user == "Alice"
+    assert len(res.items) == 2
+    assert res.items[0].id == "i1"
+    assert res.items[0].name == "Keyboard"
+    assert res.items[0].price == 99.50
+    assert res.items[1].id == "i2"
+    assert res.items[1].name == "Mouse"
+    assert res.items[1].price == 24.99
+
+
