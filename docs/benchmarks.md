@@ -38,6 +38,18 @@ gantt
 
 ---
 
+## Real-World Enterprise Benchmark: UCI `Entity` Message
+
+Parsing production-grade, deeply nested **Universal Command and Control Interface (UCI v2.5)**
+`Entity` telemetry messages (with security markings, timestamps, headers, metadata, and enums):
+
+| Deserializer Engine | Latency / Message | Throughput | Speedup vs Pure Python |
+| :--- | :--- | :--- | :--- |
+| **`pyxsdata-core`** | **16.5 µs** | **~60,360 msgs/s** | **~11.47x (1,047% faster)** |
+| `XmlParser` (Pure Python) | 190.0 µs | ~5,262 msgs/s | 1.0x (Baseline) |
+
+---
+
 ## Why Is `pyxsdata-core` So Fast?
 
 Traditional Python XML parsers (including `xml.etree.ElementTree`, `lxml`, and SAX) use a 4-step pipeline:
