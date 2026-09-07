@@ -1,0 +1,41 @@
+name: "💡 Feature Request"
+description: Propose a new feature or optimization for pyxsdata-core
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an enhancement to pyxsdata-core!
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Motivation
+      description: What limitation or use case are you trying to address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution / Optimization
+      description: Describe your proposed feature, type support, or performance optimization.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any other approaches or existing workarounds.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Benchmarks, references, or example schemas.
+    validations:
+      required: false

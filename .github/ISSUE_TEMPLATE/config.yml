@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/nth-bailey/pyxsdata-core/discussions
+    about: Ask general questions, share ideas, and discuss pyxsdata-core.
+  - name: Security Reports
+    url: https://github.com/nth-bailey/pyxsdata-core/security/advisories/new
+    about: Privately report security vulnerabilities.

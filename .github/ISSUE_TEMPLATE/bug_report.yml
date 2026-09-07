@@ -1,0 +1,61 @@
+name: "🐛 Bug Report"
+description: File a bug report to help us improve pyxsdata-core
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve pyxsdata-core! Please make sure the bug hasn't already been reported.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of the bug or unexpected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal Reproducible Example
+      description: |
+        Please provide a self-contained Python script and XML snippet that triggers the issue.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: xml
+    attributes:
+      label: XML Snippet
+      description: Paste the XML document being parsed.
+      render: xml
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Panic / Traceback / Output
+      description: Paste any panic messages, segmentation faults, or Python tracebacks here.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Architecture, Python version, pyxsdata-core version (e.g. Linux x86_64, Python 3.12.2, pyxsdata-core 0.1.0).
+    validations:
+      required: true
