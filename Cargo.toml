@@ -2,7 +2,7 @@
 name = "pyxsdata-core"
 version = "0.1.0"
 edition = "2021"
-authors = ["Nathaniel Bailey <nathaniel@nthbailey.com>"]
+authors = ["Bailey Nguyen <bailey.tan.nguyen@gmail.com>"]
 description = "Ultra-fast native XML data binding core for pyxsdata"
 license = "MIT"
 readme = "README.md"
