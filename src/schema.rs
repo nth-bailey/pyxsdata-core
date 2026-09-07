@@ -299,3 +299,65 @@ impl ModelSchema {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_model_schema_building_and_mapping() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let _ = py.import_bound("typing").unwrap();
+            let _ = py.import_bound("dataclasses").unwrap();
+
+            let code = r#"
+from dataclasses import dataclass, field
+
+@dataclass
+class ChildModel:
+    age: int = 10
+
+@dataclass
+class ComplexModel:
+    attr_id: str = field(metadata={"name": "ns:id", "type": "Attribute"})
+    child: ChildModel | None = field(default=None, metadata={"name": "ns:child", "type": "Element"})
+    tags: list[str] = field(default_factory=list, metadata={"name": "tag", "type": "Element"})
+    description: str = field(default="", metadata={"type": "Text"})
+"#;
+            let locals = pyo3::types::PyDict::new_bound(py);
+            py.run_bound(code, Some(&locals), Some(&locals)).unwrap();
+            let complex_cls = locals
+                .get_item("ComplexModel")
+                .unwrap()
+                .unwrap()
+                .downcast_into::<pyo3::types::PyType>()
+                .unwrap();
+
+            let schema = ModelSchema::from_py_class(&complex_cls).unwrap();
+
+            // Check attribute map (both prefixed and stripped)
+            assert!(schema.attribute_map.contains_key(&b"ns:id"[..]));
+            assert!(schema.attribute_map.contains_key(&b"id"[..]));
+
+            // Check element map (both prefixed and stripped)
+            assert!(schema.element_map.contains_key(&b"ns:child"[..]));
+            assert!(schema.element_map.contains_key(&b"child"[..]));
+            assert!(schema.element_map.contains_key(&b"tag"[..]));
+
+            // Check text field index
+            assert!(schema.text_field.is_some());
+            let text_idx = schema.text_field.unwrap();
+            assert_eq!(schema.fields[text_idx].py_name, "description");
+        });
+    }
+
+    #[test]
+    fn test_model_schema_rejects_non_model() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let int_type = py.get_type_bound::<pyo3::types::PyInt>();
+            assert!(ModelSchema::from_py_class(&int_type).is_err());
+        });
+    }
+}

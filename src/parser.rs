@@ -357,3 +357,88 @@ impl XmlDeserializer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quick_xml::events::BytesStart;
+
+    #[test]
+    fn test_is_nil_element_detection() {
+        let tag = BytesStart::from_content("elem xsi:nil=\"true\"", 4);
+        assert!(is_nil_element(&tag));
+
+        let tag_one = BytesStart::from_content("elem nil=\"1\"", 4);
+        assert!(is_nil_element(&tag_one));
+
+        let tag_false = BytesStart::from_content("elem xsi:nil=\"false\"", 4);
+        assert!(!is_nil_element(&tag_false));
+
+        let tag_regular = BytesStart::from_content("elem id=\"123\"", 4);
+        assert!(!is_nil_element(&tag_regular));
+    }
+
+    #[test]
+    fn test_xml_deserializer_from_rust() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+from dataclasses import dataclass, field
+
+@dataclass
+class SimpleItem:
+    id: int = field(metadata={"type": "Attribute"})
+    name: str = field(default="")
+"#;
+            let _ = py.import_bound("typing").unwrap();
+            let _ = py.import_bound("dataclasses").unwrap();
+            let locals = pyo3::types::PyDict::new_bound(py);
+            py.run_bound(code, Some(&locals), Some(&locals)).unwrap();
+            let simple_item_cls = locals
+                .get_item("SimpleItem")
+                .unwrap()
+                .unwrap()
+                .downcast_into::<pyo3::types::PyType>()
+                .unwrap();
+
+            let schema = ModelSchema::from_py_class(&simple_item_cls).unwrap();
+            let xml = b"<SimpleItem id=\"99\"><name>RustNative</name></SimpleItem>";
+            let res = XmlDeserializer::deserialize(py, xml, schema).unwrap();
+            let obj = res.bind(py);
+
+            assert_eq!(obj.getattr("id").unwrap().extract::<i64>().unwrap(), 99);
+            assert_eq!(
+                obj.getattr("name").unwrap().extract::<String>().unwrap(),
+                "RustNative"
+            );
+        });
+    }
+
+    #[test]
+    fn test_xml_deserializer_malformed_xml() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Dummy:
+    pass
+"#;
+            let _ = py.import_bound("typing").unwrap();
+            let _ = py.import_bound("dataclasses").unwrap();
+            let locals = pyo3::types::PyDict::new_bound(py);
+            py.run_bound(code, Some(&locals), Some(&locals)).unwrap();
+            let dummy_cls = locals
+                .get_item("Dummy")
+                .unwrap()
+                .unwrap()
+                .downcast_into::<pyo3::types::PyType>()
+                .unwrap();
+            let schema = ModelSchema::from_py_class(&dummy_cls).unwrap();
+
+            let malformed = b"<Dummy><unclosed>";
+            assert!(XmlDeserializer::deserialize(py, malformed, schema).is_err());
+        });
+    }
+}

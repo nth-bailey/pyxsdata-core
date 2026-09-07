@@ -27,6 +27,9 @@ jobs:
           cargo fmt --check
           cargo clippy -- -D warnings
 
+      - name: Rust unit tests
+        run: cargo test
+
       - name: Install dependencies & build
         run: |
           python -m pip install --upgrade pip

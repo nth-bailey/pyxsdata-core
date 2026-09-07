@@ -156,3 +156,143 @@ fn trim_bytes(bytes: &[u8]) -> &[u8] {
     }
     &bytes[start..end]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_trim_bytes_variations() {
+        assert_eq!(trim_bytes(b""), b"");
+        assert_eq!(trim_bytes(b"   \r\n\t  "), b"");
+        assert_eq!(trim_bytes(b"hello"), b"hello");
+        assert_eq!(trim_bytes(b"  hello  "), b"hello");
+        assert_eq!(trim_bytes(b"\n\t\r  world  \r\n"), b"world");
+        assert_eq!(trim_bytes(b"a b c"), b"a b c");
+    }
+
+    #[test]
+    fn test_parse_scalar_primitives() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            // String
+            let res = ValueConverter::parse_scalar(py, &ScalarType::String, b"  abc  ").unwrap();
+            assert_eq!(res.extract::<String>().unwrap(), "  abc  ");
+
+            let invalid_utf8 = [0xFF, 0xFE];
+            assert!(ValueConverter::parse_scalar(py, &ScalarType::String, &invalid_utf8).is_err());
+
+            // Int
+            let res = ValueConverter::parse_scalar(py, &ScalarType::Int, b" 42 \n").unwrap();
+            assert_eq!(res.extract::<i64>().unwrap(), 42);
+
+            let res_neg = ValueConverter::parse_scalar(py, &ScalarType::Int, b"-100").unwrap();
+            assert_eq!(res_neg.extract::<i64>().unwrap(), -100);
+
+            assert!(ValueConverter::parse_scalar(py, &ScalarType::Int, b"not_an_int").is_err());
+
+            // Float
+            let res = ValueConverter::parse_scalar(py, &ScalarType::Float, b" 3.1415 ").unwrap();
+            assert!((res.extract::<f64>().unwrap() - 3.1415).abs() < 1e-6);
+
+            let res_sci = ValueConverter::parse_scalar(py, &ScalarType::Float, b"1e-3").unwrap();
+            assert!((res_sci.extract::<f64>().unwrap() - 0.001).abs() < 1e-6);
+
+            assert!(
+                ValueConverter::parse_scalar(py, &ScalarType::Float, b"invalid_float").is_err()
+            );
+
+            // Bool
+            for (lit, expected) in [
+                (&b"true"[..], true),
+                (&b"1"[..], true),
+                (&b"  true  "[..], true),
+                (&b"false"[..], false),
+                (&b"0"[..], false),
+                (&b"  0\n"[..], false),
+            ] {
+                let res = ValueConverter::parse_scalar(py, &ScalarType::Bool, lit).unwrap();
+                assert_eq!(res.extract::<bool>().unwrap(), expected);
+            }
+            assert!(ValueConverter::parse_scalar(py, &ScalarType::Bool, b"yes").is_err());
+
+            // Any
+            let res = ValueConverter::parse_scalar(py, &ScalarType::Any, b"hello").unwrap();
+            assert_eq!(res.extract::<String>().unwrap(), "hello");
+        });
+    }
+
+    #[test]
+    fn test_parse_scalar_complex_types() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            // Decimal
+            let res = ValueConverter::parse_scalar(py, &ScalarType::Decimal, b" 123.456 ").unwrap();
+            let str_val = res.str().unwrap().to_string();
+            assert_eq!(str_val, "123.456");
+
+            // Enum
+            let code = "from enum import Enum\nclass Color(Enum):\n    RED = 'RED'\n    BLUE = 2\n";
+            let locals = pyo3::types::PyDict::new_bound(py);
+            py.run_bound(code, None, Some(&locals)).unwrap();
+            let color_cls = locals
+                .get_item("Color")
+                .unwrap()
+                .unwrap()
+                .into_any()
+                .unbind();
+            let enum_type = ScalarType::Enum(Arc::new(color_cls));
+
+            // string member lookup
+            let res = ValueConverter::parse_scalar(py, &enum_type, b"RED").unwrap();
+            assert_eq!(
+                res.getattr("value").unwrap().extract::<String>().unwrap(),
+                "RED"
+            );
+
+            // int member lookup
+            let res = ValueConverter::parse_scalar(py, &enum_type, b"2").unwrap();
+            assert_eq!(res.getattr("value").unwrap().extract::<i64>().unwrap(), 2);
+
+            // invalid enum
+            assert!(ValueConverter::parse_scalar(py, &enum_type, b"GREEN").is_err());
+        });
+    }
+
+    #[test]
+    fn test_parse_scalar_dates() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            // XmlDate fast path
+            let res =
+                ValueConverter::parse_scalar(py, &ScalarType::XmlDate, b"2024-05-15").unwrap();
+            let str_val = res.str().unwrap().to_string();
+            assert_eq!(str_val, "2024-05-15");
+
+            // XmlDate with timezone (fallback)
+            let res_fallback =
+                ValueConverter::parse_scalar(py, &ScalarType::XmlDate, b"2024-05-15Z").unwrap();
+            let str_val = res_fallback.str().unwrap().to_string();
+            assert_eq!(str_val, "2024-05-15Z");
+
+            // XmlDateTime
+            let res =
+                ValueConverter::parse_scalar(py, &ScalarType::XmlDateTime, b"2024-05-15T12:30:00Z")
+                    .unwrap();
+            let str_val = res.str().unwrap().to_string();
+            assert_eq!(str_val, "2024-05-15T12:30:00Z");
+
+            // XmlTime
+            let res = ValueConverter::parse_scalar(py, &ScalarType::XmlTime, b"12:30:00").unwrap();
+            let str_val = res.str().unwrap().to_string();
+            assert_eq!(str_val, "12:30:00");
+
+            // XmlDuration
+            let res =
+                ValueConverter::parse_scalar(py, &ScalarType::XmlDuration, b"P1Y2M3D").unwrap();
+            let str_val = res.str().unwrap().to_string();
+            assert_eq!(str_val, "P1Y2M3D");
+        });
+    }
+}

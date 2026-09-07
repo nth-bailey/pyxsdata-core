@@ -13,11 +13,15 @@ name = "pyxsdata_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.22.6", features = ["abi3-py312"] }
 quick-xml = "0.36"
 memchr = "2.7"
 lexical-core = "1.0"
 smallvec = "1.13"
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
 
 [profile.release]
 opt-level = 3
