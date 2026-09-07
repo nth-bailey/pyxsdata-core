@@ -1,17 +1,16 @@
 """pyxsdata-core: High-performance native Rust core for pyxsdata."""
 
-from typing import Any, TypeVar
-
 from pyxsdata_core._pyxsdata_core import (  # type: ignore[import-not-found]
     deserialize as _deserialize,
+)
+from pyxsdata_core._pyxsdata_core import (
     version as _version,
 )
 
 __version__ = _version()
-T = TypeVar("T")
 
 
-def deserialize(source: bytes | str, target_type: type[T]) -> T:
+def deserialize[T](source: bytes | str, target_type: type[T]) -> T:
     """Deserialize XML bytes or string into a Python dataclass or model instance.
 
     Args:
@@ -26,4 +25,4 @@ def deserialize(source: bytes | str, target_type: type[T]) -> T:
     return _deserialize(source, target_type)
 
 
-__all__ = ["deserialize", "__version__"]
+__all__ = ["__version__", "deserialize"]

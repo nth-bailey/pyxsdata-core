@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+
 import pytest
 import pyxsdata_core
 from pyxsdata.models.datatype import XmlDate, XmlDateTime
@@ -16,7 +17,9 @@ class Item:
 
 @dataclass
 class Container:
-    items: list[Item] = field(default_factory=list, metadata={"name": "item", "type": "Element"})
+    items: list[Item] = field(
+        default_factory=list, metadata={"name": "item", "type": "Element"}
+    )
     tag: str = field(default="")
 
 
@@ -90,7 +93,9 @@ class Child:
 @dataclass
 class Parent:
     child: Child | None = field(default=None)
-    numbers: list[int] = field(default_factory=list, metadata={"name": "num", "type": "Element"})
+    numbers: list[int] = field(
+        default_factory=list, metadata={"name": "num", "type": "Element"}
+    )
 
 
 def test_nested_dataclass_and_primitive_list():
@@ -170,3 +175,63 @@ def test_pydantic_model_deserialization():
     assert res.items[1].price == 24.99
 
 
+def test_str_input():
+    xml_str = "<Container><tag>from_str</tag></Container>"
+    res = pyxsdata_core.deserialize(xml_str, Container)
+    assert res.tag == "from_str"
+    assert res.items == []
+
+
+def test_xml_datetime():
+    @dataclass
+    class Event:
+        timestamp: XmlDateTime = field(metadata={"type": "Element"})
+
+    xml = b"<Event><timestamp>2024-05-15T14:30:00Z</timestamp></Event>"
+    res = pyxsdata_core.deserialize(xml, Event)
+    assert isinstance(res.timestamp, XmlDateTime)
+    assert res.timestamp.year == 2024
+    assert res.timestamp.month == 5
+    assert res.timestamp.day == 15
+
+
+def test_boolean_numeric_and_invalid():
+    @dataclass
+    class Flags:
+        flag_one: bool = field(metadata={"type": "Element"})
+        flag_zero: bool = field(metadata={"type": "Element"})
+
+    xml = b"<Flags><flag_one>1</flag_one><flag_zero>0</flag_zero></Flags>"
+    res = pyxsdata_core.deserialize(xml, Flags)
+    assert res.flag_one is True
+    assert res.flag_zero is False
+
+    with pytest.raises(ValueError, match="Invalid boolean"):
+        pyxsdata_core.deserialize(
+            b"<Flags><flag_one>not_a_bool</flag_one><flag_zero>0</flag_zero></Flags>",
+            Flags,
+        )
+
+
+def test_invalid_conversions():
+    @dataclass
+    class Numbers:
+        int_val: int = field(metadata={"type": "Element"})
+        float_val: float = field(metadata={"type": "Element"})
+
+    with pytest.raises(ValueError, match="Invalid integer"):
+        pyxsdata_core.deserialize(
+            b"<Numbers><int_val>abc</int_val><float_val>1.5</float_val></Numbers>",
+            Numbers,
+        )
+
+    with pytest.raises(ValueError, match="Invalid float"):
+        pyxsdata_core.deserialize(
+            b"<Numbers><int_val>10</int_val><float_val>xyz</float_val></Numbers>",
+            Numbers,
+        )
+
+
+def test_version():
+    assert isinstance(pyxsdata_core.__version__, str)
+    assert len(pyxsdata_core.__version__) > 0

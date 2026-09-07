@@ -22,3 +22,17 @@ Issues = "https://github.com/nth-bailey/pyxsdata-core/issues"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "pyxsdata_core._pyxsdata_core"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--color=yes --benchmark-skip"
+
+[tool.coverage.run]
+branch = true
+source = ["pyxsdata_core"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 100
+
