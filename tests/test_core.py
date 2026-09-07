@@ -235,3 +235,106 @@ def test_invalid_conversions():
 def test_version():
     assert isinstance(pyxsdata_core.__version__, str)
     assert len(pyxsdata_core.__version__) > 0
+
+
+def test_decimal_support():
+    from decimal import Decimal
+
+    @dataclass
+    class Invoice:
+        total: Decimal = field(metadata={"type": "Element"})
+        tax: Decimal | None = field(default=None, metadata={"type": "Element"})
+
+    xml = b"<Invoice><total>1234.5678</total><tax>98.76</tax></Invoice>"
+    res = pyxsdata_core.deserialize(xml, Invoice)
+    assert isinstance(res.total, Decimal)
+    assert res.total == Decimal("1234.5678")
+    assert res.tax == Decimal("98.76")
+
+
+def test_enum_support():
+    from enum import Enum, IntEnum
+
+    class Status(Enum):
+        ACTIVE = "active"
+        INACTIVE = "inactive"
+
+    class Priority(IntEnum):
+        LOW = 1
+        HIGH = 2
+
+    @dataclass
+    class Task:
+        status: Status = field(metadata={"type": "Element"})
+        priority: Priority = field(metadata={"type": "Element"})
+
+    xml = b"<Task><status>active</status><priority>2</priority></Task>"
+    res = pyxsdata_core.deserialize(xml, Task)
+    assert res.status == Status.ACTIVE
+    assert res.priority == Priority.HIGH
+
+    with pytest.raises(ValueError, match="Cannot convert"):
+        pyxsdata_core.deserialize(
+            b"<Task><status>invalid</status><priority>1</priority></Task>", Task
+        )
+
+
+def test_xml_time_and_duration():
+    from pyxsdata.models.datatype import XmlDuration, XmlTime
+
+    @dataclass
+    class Schedule:
+        start_time: XmlTime = field(metadata={"type": "Element"})
+        duration: XmlDuration = field(metadata={"type": "Element"})
+
+    xml = b"<Schedule><start_time>14:30:00</start_time><duration>P1DT2H</duration></Schedule>"
+    res = pyxsdata_core.deserialize(xml, Schedule)
+    assert isinstance(res.start_time, XmlTime)
+    assert res.start_time.hour == 14
+    assert isinstance(res.duration, XmlDuration)
+
+
+def test_xsi_nil():
+    @dataclass
+    class Measurement:
+        sensor_id: str = field(metadata={"type": "Attribute"})
+        value: float | None = field(default=None, metadata={"type": "Element"})
+        note: str | None = field(default=None, metadata={"type": "Element"})
+
+    # Test empty element with xsi:nil="true"
+    xml1 = b'<Measurement sensor_id="s1"><value xsi:nil="true"/><note>ok</note></Measurement>'
+    res1 = pyxsdata_core.deserialize(xml1, Measurement)
+    assert res1.sensor_id == "s1"
+    assert res1.value is None
+    assert res1.note == "ok"
+
+    # Test start/end element with xsi:nil="true"
+    xml2 = b'<Measurement sensor_id="s2"><value xsi:nil="true"></value><note>test</note></Measurement>'
+    res2 = pyxsdata_core.deserialize(xml2, Measurement)
+    assert res2.value is None
+
+    # Test nil="1"
+    xml3 = (
+        b'<Measurement sensor_id="s3"><value nil="1"/><note>test</note></Measurement>'
+    )
+    res3 = pyxsdata_core.deserialize(xml3, Measurement)
+    assert res3.value is None
+
+
+def test_namespace_prefixes():
+    xml = b"""
+    <ns1:Container xmlns:ns1="http://example.com/ns1" xmlns:ns2="http://example.com/ns2">
+        <ns1:tag>namespaced</ns1:tag>
+        <ns1:item ns2:id="100">
+            <ns1:name>Namespaced Item</ns1:name>
+            <ns1:count>5</ns1:count>
+            <ns1:score>99.0</ns1:score>
+            <ns1:active>true</ns1:active>
+        </ns1:item>
+    </ns1:Container>
+    """
+    res = pyxsdata_core.deserialize(xml, Container)
+    assert res.tag == "namespaced"
+    assert len(res.items) == 1
+    assert res.items[0].id == "100"
+    assert res.items[0].name == "Namespaced Item"

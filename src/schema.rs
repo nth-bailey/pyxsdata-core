@@ -16,8 +16,12 @@ pub enum ScalarType {
     Int,
     Float,
     Bool,
+    Decimal,
     XmlDate,
     XmlDateTime,
+    XmlTime,
+    XmlDuration,
+    Enum(Arc<PyObject>),
     Any,
 }
 
@@ -97,9 +101,15 @@ impl ModelSchema {
                 match kind {
                     FieldKind::Attribute => {
                         attribute_map.insert(xml_name.clone(), idx);
+                        if let Some(pos) = xml_name.iter().position(|&b| b == b':') {
+                            attribute_map.insert(xml_name[pos + 1..].to_vec(), idx);
+                        }
                     }
                     FieldKind::Element => {
                         element_map.insert(xml_name.clone(), idx);
+                        if let Some(pos) = xml_name.iter().position(|&b| b == b':') {
+                            element_map.insert(xml_name[pos + 1..].to_vec(), idx);
+                        }
                     }
                     FieldKind::Text => {
                         text_field = Some(idx);
@@ -186,9 +196,15 @@ impl ModelSchema {
             match kind {
                 FieldKind::Attribute => {
                     attribute_map.insert(xml_name.clone(), idx);
+                    if let Some(pos) = xml_name.iter().position(|&b| b == b':') {
+                        attribute_map.insert(xml_name[pos + 1..].to_vec(), idx);
+                    }
                 }
                 FieldKind::Element => {
                     element_map.insert(xml_name.clone(), idx);
+                    if let Some(pos) = xml_name.iter().position(|&b| b == b':') {
+                        element_map.insert(xml_name[pos + 1..].to_vec(), idx);
+                    }
                 }
                 FieldKind::Text => {
                     text_field = Some(idx);
@@ -253,12 +269,27 @@ impl ModelSchema {
             "int" => Ok(ValueType::Scalar(ScalarType::Int)),
             "float" => Ok(ValueType::Scalar(ScalarType::Float)),
             "bool" => Ok(ValueType::Scalar(ScalarType::Bool)),
+            "Decimal" => Ok(ValueType::Scalar(ScalarType::Decimal)),
             "XmlDate" => Ok(ValueType::Scalar(ScalarType::XmlDate)),
             "XmlDateTime" => Ok(ValueType::Scalar(ScalarType::XmlDateTime)),
+            "XmlTime" => Ok(ValueType::Scalar(ScalarType::XmlTime)),
+            "XmlDuration" => Ok(ValueType::Scalar(ScalarType::XmlDuration)),
             _ => {
-                // Check if it is another dataclass or Pydantic model
-                if type_obj.hasattr("__dataclass_fields__")? || type_obj.hasattr("model_fields")? {
-                    if let Ok(cls) = type_obj.downcast::<PyType>() {
+                // Check if it is an Enum
+                if let Ok(cls) = type_obj.downcast::<PyType>() {
+                    if let Ok(enum_module) = py.import_bound("enum") {
+                        if let Ok(enum_cls) = enum_module.getattr("Enum") {
+                            if cls.is_subclass(&enum_cls).unwrap_or(false) {
+                                return Ok(ValueType::Scalar(ScalarType::Enum(Arc::new(
+                                    cls.clone().into_any().unbind(),
+                                ))));
+                            }
+                        }
+                    }
+                    // Check if it is another dataclass or Pydantic model
+                    if type_obj.hasattr("__dataclass_fields__")?
+                        || type_obj.hasattr("model_fields")?
+                    {
                         let nested = Self::from_py_class(cls)?;
                         return Ok(ValueType::Nested(nested));
                     }

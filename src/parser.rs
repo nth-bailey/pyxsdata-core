@@ -78,6 +78,18 @@ impl StackFrame {
 
 pub struct XmlDeserializer;
 
+fn is_nil_element(e: &quick_xml::events::BytesStart) -> bool {
+    for attr in e.attributes().flatten() {
+        let key = attr.key.local_name();
+        if (key.as_ref() == b"nil" || key.as_ref() == b"xsi:nil")
+            && (attr.value.as_ref() == b"true" || attr.value.as_ref() == b"1")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl XmlDeserializer {
     pub fn deserialize<'py>(
         py: Python<'py>,
@@ -88,7 +100,7 @@ impl XmlDeserializer {
         reader.config_mut().trim_text(true);
 
         let mut stack: Vec<StackFrame> = Vec::with_capacity(16);
-        let mut active_scalar_field: Option<(usize, ScalarType)> = None;
+        let mut active_scalar_field: Option<(usize, ScalarType, bool)> = None;
         let mut text_buf: Vec<u8> = Vec::new();
 
         let mut buf = Vec::new();
@@ -97,6 +109,7 @@ impl XmlDeserializer {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let local_name = e.local_name().as_ref().to_vec();
+                    let is_nil = is_nil_element(e);
 
                     if stack.is_empty() {
                         // Root element
@@ -105,31 +118,48 @@ impl XmlDeserializer {
                         stack.push(frame);
                     } else {
                         // Check if child belongs to current active frame
-                        let current_frame = stack.last().unwrap();
+                        let current_frame = stack.last().ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err("Invalid XML: stack is empty")
+                        })?;
                         if let Some(&field_idx) = current_frame.schema.element_map.get(&local_name)
                         {
                             let field = &current_frame.schema.fields[field_idx];
                             match &field.val_type {
                                 ValueType::Scalar(scalar_type) => {
-                                    active_scalar_field = Some((field_idx, scalar_type.clone()));
+                                    active_scalar_field =
+                                        Some((field_idx, scalar_type.clone(), is_nil));
                                     text_buf.clear();
                                 }
                                 ValueType::Nested(nested_schema) => {
-                                    let mut frame =
-                                        StackFrame::new(Arc::clone(nested_schema), local_name);
-                                    Self::parse_attributes(py, e, &mut frame)?;
-                                    stack.push(frame);
-                                }
-                                ValueType::List(inner) => match &**inner {
-                                    ValueType::Nested(nested_schema) => {
+                                    if is_nil {
+                                        active_scalar_field =
+                                            Some((field_idx, ScalarType::Any, true));
+                                        text_buf.clear();
+                                    } else {
                                         let mut frame =
                                             StackFrame::new(Arc::clone(nested_schema), local_name);
                                         Self::parse_attributes(py, e, &mut frame)?;
                                         stack.push(frame);
                                     }
+                                }
+                                ValueType::List(inner) => match &**inner {
+                                    ValueType::Nested(nested_schema) => {
+                                        if is_nil {
+                                            active_scalar_field =
+                                                Some((field_idx, ScalarType::Any, true));
+                                            text_buf.clear();
+                                        } else {
+                                            let mut frame = StackFrame::new(
+                                                Arc::clone(nested_schema),
+                                                local_name,
+                                            );
+                                            Self::parse_attributes(py, e, &mut frame)?;
+                                            stack.push(frame);
+                                        }
+                                    }
                                     ValueType::Scalar(scalar_type) => {
                                         active_scalar_field =
-                                            Some((field_idx, scalar_type.clone()));
+                                            Some((field_idx, scalar_type.clone(), is_nil));
                                         text_buf.clear();
                                     }
                                     _ => {}
@@ -158,6 +188,7 @@ impl XmlDeserializer {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let local_name = e.local_name().as_ref().to_vec();
+                    let is_nil = is_nil_element(e);
 
                     if stack.is_empty() {
                         // Empty root
@@ -166,46 +197,61 @@ impl XmlDeserializer {
                         return frame.finish(py);
                     }
 
-                    let current_frame = stack.last_mut().unwrap();
+                    let current_frame = stack.last_mut().ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err("Invalid XML: stack is empty")
+                    })?;
                     if let Some(&field_idx) = current_frame.schema.element_map.get(&local_name) {
                         let field = &current_frame.schema.fields[field_idx];
-                        match &field.val_type {
-                            ValueType::Scalar(scalar_type) => {
-                                let py_val = ValueConverter::parse_scalar(py, scalar_type, b"")?;
+                        if is_nil {
+                            if matches!(field.val_type, ValueType::List(_)) {
                                 current_frame
-                                    .scalar_values
-                                    .insert(field_idx, py_val.unbind());
+                                    .list_values
+                                    .entry(field_idx)
+                                    .or_default()
+                                    .push(py.None());
+                            } else {
+                                current_frame.scalar_values.insert(field_idx, py.None());
                             }
-                            ValueType::Nested(nested_schema) => {
-                                let mut frame =
-                                    StackFrame::new(Arc::clone(nested_schema), local_name);
-                                Self::parse_attributes(py, e, &mut frame)?;
-                                let instance = frame.finish(py)?;
-                                current_frame.scalar_values.insert(field_idx, instance);
-                            }
-                            ValueType::List(inner) => match &**inner {
+                        } else {
+                            match &field.val_type {
                                 ValueType::Scalar(scalar_type) => {
                                     let py_val =
                                         ValueConverter::parse_scalar(py, scalar_type, b"")?;
                                     current_frame
-                                        .list_values
-                                        .entry(field_idx)
-                                        .or_default()
-                                        .push(py_val.unbind());
+                                        .scalar_values
+                                        .insert(field_idx, py_val.unbind());
                                 }
                                 ValueType::Nested(nested_schema) => {
                                     let mut frame =
                                         StackFrame::new(Arc::clone(nested_schema), local_name);
                                     Self::parse_attributes(py, e, &mut frame)?;
                                     let instance = frame.finish(py)?;
-                                    current_frame
-                                        .list_values
-                                        .entry(field_idx)
-                                        .or_default()
-                                        .push(instance);
+                                    current_frame.scalar_values.insert(field_idx, instance);
                                 }
-                                _ => {}
-                            },
+                                ValueType::List(inner) => match &**inner {
+                                    ValueType::Scalar(scalar_type) => {
+                                        let py_val =
+                                            ValueConverter::parse_scalar(py, scalar_type, b"")?;
+                                        current_frame
+                                            .list_values
+                                            .entry(field_idx)
+                                            .or_default()
+                                            .push(py_val.unbind());
+                                    }
+                                    ValueType::Nested(nested_schema) => {
+                                        let mut frame =
+                                            StackFrame::new(Arc::clone(nested_schema), local_name);
+                                        Self::parse_attributes(py, e, &mut frame)?;
+                                        let instance = frame.finish(py)?;
+                                        current_frame
+                                            .list_values
+                                            .entry(field_idx)
+                                            .or_default()
+                                            .push(instance);
+                                    }
+                                    _ => {}
+                                },
+                            }
                         }
                     }
                 }
@@ -213,25 +259,36 @@ impl XmlDeserializer {
                     let local_name_obj = e.local_name();
                     let local_name = local_name_obj.as_ref();
 
-                    if let Some((field_idx, scalar_type)) = active_scalar_field.take() {
-                        let py_val = ValueConverter::parse_scalar(py, &scalar_type, &text_buf)?;
-                        let current_frame = stack.last_mut().unwrap();
+                    if let Some((field_idx, scalar_type, is_nil)) = active_scalar_field.take() {
+                        let current_frame = stack.last_mut().ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(
+                                "Invalid XML: stack is empty on element end",
+                            )
+                        })?;
                         let field = &current_frame.schema.fields[field_idx];
+
+                        let py_val = if is_nil {
+                            py.None()
+                        } else {
+                            ValueConverter::parse_scalar(py, &scalar_type, &text_buf)?.unbind()
+                        };
 
                         if matches!(field.val_type, ValueType::List(_)) {
                             current_frame
                                 .list_values
                                 .entry(field_idx)
                                 .or_default()
-                                .push(py_val.unbind());
+                                .push(py_val);
                         } else {
-                            current_frame
-                                .scalar_values
-                                .insert(field_idx, py_val.unbind());
+                            current_frame.scalar_values.insert(field_idx, py_val);
                         }
                     } else if let Some(current_frame) = stack.last() {
                         if current_frame.element_name == local_name {
-                            let mut popped = stack.pop().unwrap();
+                            let mut popped = stack.pop().ok_or_else(|| {
+                                pyo3::exceptions::PyValueError::new_err(
+                                    "Invalid XML: stack underflow",
+                                )
+                            })?;
                             let instance = popped.finish(py)?;
 
                             if let Some(parent_frame) = stack.last_mut() {
@@ -258,6 +315,7 @@ impl XmlDeserializer {
                         }
                     }
                 }
+
                 Ok(Event::Eof) => break,
                 Err(e) => {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(

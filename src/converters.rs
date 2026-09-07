@@ -77,6 +77,53 @@ impl ValueConverter {
                     .getattr("XmlDateTime")?;
                 xml_dt_cls.call_method1("from_string", (s,))
             }
+            ScalarType::Decimal => {
+                let s = std::str::from_utf8(trim_bytes(bytes)).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!("Invalid UTF-8: {}", e))
+                })?;
+                let decimal_cls = py.import_bound("decimal")?.getattr("Decimal")?;
+                decimal_cls.call1((s,))
+            }
+            ScalarType::XmlTime => {
+                let s = std::str::from_utf8(trim_bytes(bytes)).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!("Invalid UTF-8: {}", e))
+                })?;
+                let xml_time_cls = py
+                    .import_bound("pyxsdata.models.datatype")?
+                    .getattr("XmlTime")?;
+                xml_time_cls.call_method1("from_string", (s,))
+            }
+            ScalarType::XmlDuration => {
+                let s = std::str::from_utf8(trim_bytes(bytes)).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!("Invalid UTF-8: {}", e))
+                })?;
+                let xml_dur_cls = py
+                    .import_bound("pyxsdata.models.datatype")?
+                    .getattr("XmlDuration")?;
+                xml_dur_cls.call1((s,))
+            }
+
+            ScalarType::Enum(ref enum_obj) => {
+                let s = std::str::from_utf8(trim_bytes(bytes)).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!("Invalid UTF-8: {}", e))
+                })?;
+                let cls = enum_obj.bind(py);
+                if let Ok(val) = cls.call1((s,)) {
+                    return Ok(val);
+                }
+                if let Ok(i) = s.parse::<i64>() {
+                    if let Ok(val) = cls.call1((i,)) {
+                        return Ok(val);
+                    }
+                }
+                if let Ok(val) = cls.get_item(s) {
+                    return Ok(val);
+                }
+                Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Cannot convert {:?} to enum {:?}",
+                    s, cls
+                )))
+            }
             ScalarType::Any => {
                 let s = std::str::from_utf8(bytes).map_err(|e| {
                     pyo3::exceptions::PyValueError::new_err(format!("Invalid UTF-8: {}", e))

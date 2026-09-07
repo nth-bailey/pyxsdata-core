@@ -20,7 +20,7 @@ fn get_or_create_schema<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<ModelSche
 
     // Check read lock
     {
-        let cache = SCHEMA_CACHE.read().unwrap();
+        let cache = SCHEMA_CACHE.read().unwrap_or_else(|p| p.into_inner());
         if let Some(ref map) = *cache {
             if let Some(schema) = map.get(&type_key) {
                 return Ok(Arc::clone(schema));
@@ -33,7 +33,7 @@ fn get_or_create_schema<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<ModelSche
 
     // Write lock
     {
-        let mut cache = SCHEMA_CACHE.write().unwrap();
+        let mut cache = SCHEMA_CACHE.write().unwrap_or_else(|p| p.into_inner());
         let map = cache.get_or_insert_with(HashMap::new);
         map.insert(type_key, Arc::clone(&schema));
     }
