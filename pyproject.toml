@@ -25,7 +25,8 @@ module-name = "pyxsdata_core._pyxsdata_core"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--color=yes --benchmark-skip"
+addopts = "--color=yes"
+
 
 [tool.coverage.run]
 branch = true
