@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pyxsdata-core"
+version = "0.1.0"
+description = "Ultra-fast native XML data binding core for pyxsdata"
+readme = "README.md"
+authors = [{ name = "Nathaniel Bailey", email = "nathaniel@nthbailey.com" }]
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "pyxsdata_core._pyxsdata_core"

@@ -1,0 +1,27 @@
+[package]
+name = "pyxsdata-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Nathaniel Bailey <nathaniel@nthbailey.com>"]
+description = "Ultra-fast native XML data binding core for pyxsdata"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/nth-bailey/pyxsdata-core"
+
+[lib]
+name = "pyxsdata_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py312"] }
+quick-xml = "0.36"
+memchr = "2.7"
+lexical-core = "1.0"
+smallvec = "1.13"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

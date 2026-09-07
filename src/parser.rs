@@ -1,0 +1,284 @@
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::converters::ValueConverter;
+use crate::schema::{ModelSchema, ScalarType, ValueType};
+
+struct StackFrame {
+    schema: Arc<ModelSchema>,
+    element_name: Vec<u8>,
+    scalar_values: HashMap<usize, PyObject>,
+    list_values: HashMap<usize, Vec<PyObject>>,
+    frame_text_buf: Vec<u8>,
+}
+
+impl StackFrame {
+    fn new(schema: Arc<ModelSchema>, element_name: Vec<u8>) -> Self {
+        Self {
+            schema,
+            element_name,
+            scalar_values: HashMap::new(),
+            list_values: HashMap::new(),
+            frame_text_buf: Vec::new(),
+        }
+    }
+
+    fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<PyObject> {
+        let kwargs = PyDict::new_bound(py);
+
+        // Populate collected fields
+        for (idx, val) in &self.scalar_values {
+            let field = &self.schema.fields[*idx];
+            kwargs.set_item(&field.py_name_obj, val)?;
+        }
+
+        for (idx, list_items) in &self.list_values {
+            let field = &self.schema.fields[*idx];
+            let py_list = PyList::new_bound(py, list_items);
+            kwargs.set_item(&field.py_name_obj, py_list)?;
+        }
+
+        if let Some(text_idx) = self.schema.text_field {
+            if !self.frame_text_buf.is_empty() {
+                let field = &self.schema.fields[text_idx];
+                if let ValueType::Scalar(ref scalar_type) = field.val_type {
+                    let py_val =
+                        ValueConverter::parse_scalar(py, scalar_type, &self.frame_text_buf)?;
+                    kwargs.set_item(&field.py_name_obj, py_val)?;
+                }
+            }
+        }
+
+        let cls = self.schema.py_class.bind(py);
+        let instance = cls.call((), Some(&kwargs))?;
+        Ok(instance.unbind())
+    }
+}
+
+pub struct XmlDeserializer;
+
+impl XmlDeserializer {
+    pub fn deserialize<'py>(
+        py: Python<'py>,
+        xml_bytes: &[u8],
+        root_schema: Arc<ModelSchema>,
+    ) -> PyResult<PyObject> {
+        let mut reader = Reader::from_reader(xml_bytes);
+        reader.config_mut().trim_text(true);
+
+        let mut stack: Vec<StackFrame> = Vec::with_capacity(16);
+        let mut active_scalar_field: Option<(usize, ScalarType)> = None;
+        let mut text_buf: Vec<u8> = Vec::new();
+
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) => {
+                    let local_name = e.local_name().as_ref().to_vec();
+
+                    if stack.is_empty() {
+                        // Root element
+                        let mut frame = StackFrame::new(Arc::clone(&root_schema), local_name);
+                        Self::parse_attributes(py, e, &mut frame)?;
+                        stack.push(frame);
+                    } else {
+                        // Check if child belongs to current active frame
+                        let current_frame = stack.last().unwrap();
+                        if let Some(&field_idx) = current_frame.schema.element_map.get(&local_name)
+                        {
+                            let field = &current_frame.schema.fields[field_idx];
+                            match &field.val_type {
+                                ValueType::Scalar(scalar_type) => {
+                                    active_scalar_field = Some((field_idx, scalar_type.clone()));
+                                    text_buf.clear();
+                                }
+                                ValueType::Nested(nested_schema) => {
+                                    let mut frame =
+                                        StackFrame::new(Arc::clone(nested_schema), local_name);
+                                    Self::parse_attributes(py, e, &mut frame)?;
+                                    stack.push(frame);
+                                }
+                                ValueType::List(inner) => match &**inner {
+                                    ValueType::Nested(nested_schema) => {
+                                        let mut frame =
+                                            StackFrame::new(Arc::clone(nested_schema), local_name);
+                                        Self::parse_attributes(py, e, &mut frame)?;
+                                        stack.push(frame);
+                                    }
+                                    ValueType::Scalar(scalar_type) => {
+                                        active_scalar_field =
+                                            Some((field_idx, scalar_type.clone()));
+                                        text_buf.clear();
+                                    }
+                                    _ => {}
+                                },
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Text(ref e)) => {
+                    if active_scalar_field.is_some() {
+                        text_buf.extend_from_slice(e.as_ref());
+                    } else if let Some(current_frame) = stack.last_mut() {
+                        if current_frame.schema.text_field.is_some() {
+                            current_frame.frame_text_buf.extend_from_slice(e.as_ref());
+                        }
+                    }
+                }
+                Ok(Event::CData(ref e)) => {
+                    if active_scalar_field.is_some() {
+                        text_buf.extend_from_slice(e.as_ref());
+                    } else if let Some(current_frame) = stack.last_mut() {
+                        if current_frame.schema.text_field.is_some() {
+                            current_frame.frame_text_buf.extend_from_slice(e.as_ref());
+                        }
+                    }
+                }
+                Ok(Event::Empty(ref e)) => {
+                    let local_name = e.local_name().as_ref().to_vec();
+
+                    if stack.is_empty() {
+                        // Empty root
+                        let mut frame = StackFrame::new(Arc::clone(&root_schema), local_name);
+                        Self::parse_attributes(py, e, &mut frame)?;
+                        return frame.finish(py);
+                    }
+
+                    let current_frame = stack.last_mut().unwrap();
+                    if let Some(&field_idx) = current_frame.schema.element_map.get(&local_name) {
+                        let field = &current_frame.schema.fields[field_idx];
+                        match &field.val_type {
+                            ValueType::Scalar(scalar_type) => {
+                                let py_val = ValueConverter::parse_scalar(py, scalar_type, b"")?;
+                                current_frame
+                                    .scalar_values
+                                    .insert(field_idx, py_val.unbind());
+                            }
+                            ValueType::Nested(nested_schema) => {
+                                let mut frame =
+                                    StackFrame::new(Arc::clone(nested_schema), local_name);
+                                Self::parse_attributes(py, e, &mut frame)?;
+                                let instance = frame.finish(py)?;
+                                current_frame.scalar_values.insert(field_idx, instance);
+                            }
+                            ValueType::List(inner) => match &**inner {
+                                ValueType::Scalar(scalar_type) => {
+                                    let py_val =
+                                        ValueConverter::parse_scalar(py, scalar_type, b"")?;
+                                    current_frame
+                                        .list_values
+                                        .entry(field_idx)
+                                        .or_default()
+                                        .push(py_val.unbind());
+                                }
+                                ValueType::Nested(nested_schema) => {
+                                    let mut frame =
+                                        StackFrame::new(Arc::clone(nested_schema), local_name);
+                                    Self::parse_attributes(py, e, &mut frame)?;
+                                    let instance = frame.finish(py)?;
+                                    current_frame
+                                        .list_values
+                                        .entry(field_idx)
+                                        .or_default()
+                                        .push(instance);
+                                }
+                                _ => {}
+                            },
+                        }
+                    }
+                }
+                Ok(Event::End(ref e)) => {
+                    let local_name_obj = e.local_name();
+                    let local_name = local_name_obj.as_ref();
+
+                    if let Some((field_idx, scalar_type)) = active_scalar_field.take() {
+                        let py_val = ValueConverter::parse_scalar(py, &scalar_type, &text_buf)?;
+                        let current_frame = stack.last_mut().unwrap();
+                        let field = &current_frame.schema.fields[field_idx];
+
+                        if matches!(field.val_type, ValueType::List(_)) {
+                            current_frame
+                                .list_values
+                                .entry(field_idx)
+                                .or_default()
+                                .push(py_val.unbind());
+                        } else {
+                            current_frame
+                                .scalar_values
+                                .insert(field_idx, py_val.unbind());
+                        }
+                    } else if let Some(current_frame) = stack.last() {
+                        if current_frame.element_name == local_name {
+                            let mut popped = stack.pop().unwrap();
+                            let instance = popped.finish(py)?;
+
+                            if let Some(parent_frame) = stack.last_mut() {
+                                if let Some(&parent_field_idx) =
+                                    parent_frame.schema.element_map.get(local_name)
+                                {
+                                    let field = &parent_frame.schema.fields[parent_field_idx];
+                                    if matches!(field.val_type, ValueType::List(_)) {
+                                        parent_frame
+                                            .list_values
+                                            .entry(parent_field_idx)
+                                            .or_default()
+                                            .push(instance);
+                                    } else {
+                                        parent_frame
+                                            .scalar_values
+                                            .insert(parent_field_idx, instance);
+                                    }
+                                }
+                            } else {
+                                // Stack is empty, root completed!
+                                return Ok(instance);
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(e) => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "XML parse error at position {}: {:?}",
+                        reader.buffer_position(),
+                        e
+                    )));
+                }
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        Err(pyo3::exceptions::PyValueError::new_err(
+            "XML document ended unexpectedly without root completion",
+        ))
+    }
+
+    fn parse_attributes<'py>(
+        py: Python<'py>,
+        e: &quick_xml::events::BytesStart,
+        frame: &mut StackFrame,
+    ) -> PyResult<()> {
+        for attr in e.attributes() {
+            let attr = attr.map_err(|err| {
+                pyo3::exceptions::PyValueError::new_err(format!("Invalid attribute: {:?}", err))
+            })?;
+            let local_name_obj = attr.key.local_name();
+            let attr_name = local_name_obj.as_ref();
+
+            if let Some(&field_idx) = frame.schema.attribute_map.get(attr_name) {
+                let field = &frame.schema.fields[field_idx];
+                if let ValueType::Scalar(ref scalar_type) = field.val_type {
+                    let py_val = ValueConverter::parse_scalar(py, scalar_type, &attr.value)?;
+                    frame.scalar_values.insert(field_idx, py_val.unbind());
+                }
+            }
+        }
+        Ok(())
+    }
+}
